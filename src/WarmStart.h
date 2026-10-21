@@ -73,10 +73,11 @@ protected:
                 }
             }
 
-            // Compute sporadic sum for this processor
+            // Compute sporadic sum (R_j) for this processor
             double sporadic_sum = 0.0;
-            for (int i : sporadic_on_j) {
-                sporadic_sum += inst.sporadic_tasks[i].WCET;
+            for (int u : sporadic_on_j) {
+                sporadic_sum += inst.sporadic_tasks[u].WCET * 
+                    std::ceil((inst.minor_cycle + inst.sporadic_tasks[u].jitter) / inst.sporadic_tasks[u].min_inter_arrival);
             }
 
             // Test each threshold
@@ -84,31 +85,31 @@ protected:
                 std::vector<double> large_wcets;
                 int job_count = 0;
                 periodic_on_j_violating.clear();
-                // Collect jobs with effective WCET > C/threshold
+                
+                // Collect jobs where raw WCET > (C - R_j) / threshold
+                double threshold_value = (Cval - sporadic_sum) / threshold;
+                
                 for (int i : periodic_on_j) {
-                    double effective_wcet = inst.periodic_tasks[i].WCET + sporadic_sum;
-                    double threshold_value = Cval / threshold;
+                    double raw_wcet = inst.periodic_tasks[i].WCET;
 
-                    if (isLessThan(threshold_value, effective_wcet)) {
+                    if (isLessThan(threshold_value, raw_wcet)) {
                         job_count += inst.periodic_tasks[i].jobs;
                         periodic_on_j_violating.push_back(i);
                         for (size_t k = 0; k < inst.periodic_tasks[i].jobs; k++) {
-                            large_wcets.push_back(effective_wcet);
+                            large_wcets.push_back(raw_wcet);
                         }
                     }
                 }
 
                 // Check for violation: if more than (threshold-1)*frames jobs are large
-                // E.g., for threshold=2 (C/2): violation if more than F jobs
-                //       for threshold=3 (C/3): violation if more than 2F jobs
                 int max_allowed_jobs = (int)std::floor((threshold - 1.0) * inst.frames);
 
                 if (job_count > max_allowed_jobs) {
                     // Violation found: compute C_min
                     std::sort(large_wcets.begin(), large_wcets.end(), std::greater<double>());
 
-                    double W_critical = large_wcets[max_allowed_jobs];
-                    double C_min_required = threshold * W_critical;
+                    double c_critical = large_wcets[max_allowed_jobs];
+                    double C_min_required = (threshold * c_critical) + sporadic_sum;
 
                     // Build cut
                     GRBLinExpr sum_assignment_change = 0;
