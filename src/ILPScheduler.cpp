@@ -17,15 +17,38 @@
 
 using namespace std;
 
+
+class BoundCutCallback : public GRBCallback {
+    GRBVar f;
+    double lb;
+public:
+    BoundCutCallback(GRBVar f_, double lb_) : f(f_), lb(lb_) {}
+protected:
+    void callback() override {
+        if (where != GRB_CB_MIPNODE) return;
+        
+        // Restrict cut generation strictly to the root node (Node 0)
+        double nodecnt = getDoubleInfo(GRB_CB_MIPNODE_NODCNT);
+        if (nodecnt > 0) return; 
+
+        if (getIntInfo(GRB_CB_MIPNODE_STATUS) != GRB_OPTIMAL) return;
+        
+        double f_lp = getNodeRel(f);         
+        if (f_lp < lb - 1e-6) {
+            addCut(f >= lb);                 
+            cout << "Root node bound cut applied: f >= " << lb << " (LP was " << f_lp << ")\n";
+        }
+    }
+};
+
 void ILPScheduler::solve() {
     try {
         GRBEnv env(true);
-        env.set(GRB_IntParam_OutputFlag, 0);
-        env.set(GRB_IntParam_LogToConsole, 0);
+        // env.set(GRB_IntParam_OutputFlag, 1);
+        // env.set(GRB_IntParam_LogToConsole, 1);
         env.start();
 
         GRBModel model(env);
-        model.set(GRB_DoubleParam_TimeLimit, time_limit);
         model.set(GRB_DoubleParam_BestObjStop, target);
 
         // s_uj: Binary = 1 if sporadic task 'u' is assigned to processor 'j'
@@ -189,7 +212,7 @@ void ILPScheduler::solve() {
 
         bool all_wcets_integer = true;
         for (const auto& task : inst.periodic_tasks) {
-            if (areAlmostEqual(abs(task.WCET), round(task.WCET))) {
+            if (!areAlmostEqual(abs(task.WCET), round(task.WCET))) {
                 all_wcets_integer = false;
                 break;
             }
@@ -197,7 +220,7 @@ void ILPScheduler::solve() {
 
         if (all_wcets_integer) {
             for (const auto& task : inst.sporadic_tasks) {
-                if (areAlmostEqual(abs(task.WCET), round(task.WCET))) {
+                if (!areAlmostEqual(abs(task.WCET), round(task.WCET))) {
                     all_wcets_integer = false;
                     break;
                 }
@@ -205,7 +228,6 @@ void ILPScheduler::solve() {
         }
 
         // Run warm start computation
-        double lb = 0;
         WarmStart ws;
         if (lb_time_limit > 0) {
             ws = computeWS(inst, lb_time_limit, all_wcets_integer);
@@ -217,15 +239,17 @@ void ILPScheduler::solve() {
             for (size_t i = 0; i < inst.sporadic_tasks.size(); ++i)
                 for (size_t j = 0; j < inst.processors; ++j)
                     s_uj[i][j].set(GRB_DoubleAttr_Start, ws.s[i][j]);
-            lb = ws.Cvalue;
+            time_limit += lb_time_limit - ws.solution_time;
+
         }
+        model.set(GRB_DoubleParam_TimeLimit, time_limit);
 
         // frame_var represents the maximum processor occupancy (frame length)
         GRBVar frame_var;
         if (all_wcets_integer)
-            frame_var = model.addVar(lb, inst.major_cycle, 0.0, GRB_INTEGER, "Frame_Length");
+            frame_var = model.addVar(0, inst.major_cycle, 0.0, GRB_INTEGER, "Frame_Length");
         else
-            frame_var = model.addVar(lb, inst.major_cycle, 0.0, GRB_CONTINUOUS, "Frame_Length");
+            frame_var = model.addVar(0, inst.major_cycle, 0.0, GRB_CONTINUOUS, "Frame_Length");
 
         // Set objective: Minimize the maximum frame length
         GRBLinExpr obj = frame_var;
@@ -327,6 +351,14 @@ void ILPScheduler::solve() {
                     }
                 }
             }
+        }        
+
+        // Register the pre-computed bound cut callback if warm start produced a bound
+        BoundCutCallback* cb = nullptr;
+        if (lb_time_limit > 0 && ws.Cvalue_bound > 0) {
+            cb = new BoundCutCallback(frame_var, ws.Cvalue_bound);
+            model.setCallback(cb);
+            cout << "BoundCutCallback registered with pre-computed bound: " << ws.Cvalue_bound << "\n";
         }
 
         cout << "Starting ILP computation with "
@@ -335,24 +367,9 @@ void ILPScheduler::solve() {
                   << inst.processors << " processors.\n";
         model.optimize();
         cout << "ILP computation completed.\n";
-        double gap;
-        if (lb_time_limit > 0 && !ws.optimal) {
-            gap = (model.get(GRB_DoubleAttr_ObjVal) - ws.Cvalue_bound) / ws.Cvalue_bound;
-        } else {
-            gap = model.get(GRB_DoubleAttr_MIPGap);
-        }
+        double gap = model.get(GRB_DoubleAttr_MIPGap);
 
         solution_time = model.get(GRB_DoubleAttr_Runtime) + ws.solution_time;
-
-        if (lb_time_limit > 0 && !ws.optimal && model.get(GRB_DoubleAttr_Runtime) < time_limit) {
-            cout << "Warm start solution was not optimal. Continuing ILP optimization with remaining time limit.\n";
-            model.set(GRB_DoubleParam_TimeLimit, time_limit - model.get(GRB_DoubleAttr_Runtime));
-            frame_var.set(GRB_DoubleAttr_LB, 0);
-            model.update();
-            model.optimize();
-            gap = model.get(GRB_DoubleAttr_MIPGap);
-            solution_time += model.get(GRB_DoubleAttr_Runtime);
-        }
 
         if (model.get(GRB_IntAttr_SolCount) > 0) {
             max_occupancy = model.get(GRB_DoubleAttr_ObjVal);

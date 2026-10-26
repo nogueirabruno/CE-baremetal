@@ -235,16 +235,16 @@ int main(int argc, char* argv[]) {
         for (int i = 3; i < argc; ++i) {
             string arg = argv[i];
 
-            if (arg == "-lb") {
+            if (arg == "-ws") {
                 // Check next argument exists
                 if (i + 1 >= argc)
-                    throw invalid_argument("Missing <lb_time> after -lb.");
+                    throw invalid_argument("Missing <lb_time> after -ws.");
 
                 // Try to parse time
                 try {
                     ws_time_limit = stod(argv[++i]);
                 } catch (...) {
-                    throw invalid_argument("Invalid numeric value for -lb.");
+                    throw invalid_argument("Invalid numeric value for -ws.");
                 }
             }
             else if (arg == "-T") {

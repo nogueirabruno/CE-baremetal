@@ -53,7 +53,7 @@ protected:
         size_t J = inst.processors;
 
         // Define threshold divisors
-        std::vector<double> thresholds = {2,3};
+        std::vector<double> thresholds = {2,3,4,5};
 
         // Iterate through all processors to FIND a violation
         for (size_t j = 0; j < J; j++) {
@@ -112,19 +112,21 @@ protected:
                     double C_min_required = (threshold * c_critical) + sporadic_sum;
 
                     // Build cut
-                    GRBLinExpr sum_assignment_change = 0;
+                    // for (size_t p = 0; p < J; p++) {
+                        GRBLinExpr sum_assignment_change = 0;
 
-                    for (int i : periodic_on_j_violating) {
-                        sum_assignment_change += (1.0 - y[i][j]);
-                    }
+                        for (int i : periodic_on_j_violating) {
+                            sum_assignment_change += (1.0 - y[i][j]);
+                        }
 
-                    for (int i : sporadic_on_j) {
-                        sum_assignment_change += (1.0 - s[i][j]);
-                    }
+                        for (int i : sporadic_on_j) {
+                            sum_assignment_change += (1.0 - s[i][j]);
+                        }
 
-                    // Add lazy constraint
-                    GRBLinExpr cut_rhs = C_min_required - C_min_required * sum_assignment_change;
-                    addLazy(frame_var >= cut_rhs);
+                        // Add lazy constraint
+                        GRBLinExpr cut_rhs = C_min_required - C_min_required * sum_assignment_change;
+                        addLazy(frame_var >= cut_rhs);
+                    //}
                     return;
                 }
             }
@@ -212,6 +214,7 @@ WarmStart computeWS(const Instance &inst, double lb_time_limit, bool all_integer
     PackingConstraintCallback cb_jl(inst, y_ij, s_uj, frame_var, ws);
     model.setCallback(&cb_jl);
     model.set(GRB_IntParam_LazyConstraints, 1);
+
 
     GRBLinExpr obj = frame_var;
     model.setObjective(obj, GRB_MINIMIZE);
